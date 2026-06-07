@@ -114,4 +114,5 @@ def test_audit_log_records_denials(tmp_path: Path) -> None:
 def test_default_estimator_is_conservative() -> None:
     # Very long prompt should still estimate something nonzero.
     from hermes_budget_skin import _default_estimate
+
     assert _default_estimate("x" * 100_000) > 0

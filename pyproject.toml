@@ -20,9 +20,9 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-  # Runtime deps are intentionally tiny. Both libraries are tiny and stable.
+  # Runtime deps are intentionally tiny. The shared USD pool comes from
+  # token-budget-py; the egress allowlist is a plain set check in this package.
   "token-budget-py>=0.1.0",
-  "agentleash>=0.1.0",
 ]
 
 [project.optional-dependencies]

@@ -4,10 +4,11 @@ The skin wraps any object that exposes a `run(prompt, **kwargs)` method
 (matches the Hermes Agent runtime). Every call is gated by three checks:
 
 1. Shared atomic USD pool (`token-budget-py`). Multiple workers share one
-   counter; `reserve()` returns `BudgetExceeded` before the model call.
-2. Per-call USD cap + outbound domain allowlist (`agentleash`). Catches
-   the case where one giant prompt would breach the per-worker fairness
-   ceiling, and blocks the agent from talking to non-allowlisted hosts.
+   counter; the pre-call reservation raises `BudgetExceeded` before the
+   model call when the pool is exhausted.
+2. Outbound domain allowlist. After the call, any contacted domain that is
+   not on the allowlist raises `EgressBlocked` and the reservation is
+   refunded.
 3. Structured JSONL audit log. One row per call, with timestamp, prompt
    hash, model, tokens, cost, and the result of each guard.
 
@@ -93,50 +94,62 @@ class BudgetSkin:
         cost_fn: Callable[[Any], float] | None = None,
         domain_fn: Callable[[Any], list[str]] | None = None,
     ) -> None:
-        from token_budget import Budget  # type: ignore[import-untyped]
+        from token_budget import BudgetPool  # type: ignore[import-untyped]
 
         self._inner = inner
-        self._budget = Budget.new_usd(usd_cap)
+        self._budget = BudgetPool(usd_cap=usd_cap)
         self._allowed = set(allowed_domains)
         self._audit_path = Path(audit_log) if audit_log else None
         self._estimate = estimate_fn or _default_estimate
         self._cost = cost_fn or _default_cost
         self._domains = domain_fn or (lambda _r: [])
+        # Largest actual cost observed so far. Used to size the pre-call
+        # reservation so a worker that is already near the cap is refused
+        # *before* the model call, not after the bill lands.
+        self._last_actual = 0.0
 
     def run(self, prompt: str, **kwargs: Any) -> Any:
-        start = time.time()
-        estimate = self._estimate(prompt)
-        reason: str | None = None
-        allowed = True
-        actual = 0.0
-        result: Any = None
+        from token_budget import BudgetExceeded as _PoolExceeded
 
+        start = time.time()
+        # Reserve the larger of the cheap per-prompt estimate and the biggest
+        # actual cost seen so far, so the pool gates the call up front.
+        estimate = max(self._estimate(prompt), self._last_actual)
+
+        # --- Guard 1: reserve against the shared pool before the model call. ---
         try:
-            self._budget.reserve(estimate)
-        except Exception as e:
+            reservation = self._budget.try_reserve(usd=estimate)
+        except _PoolExceeded as e:
             reason = f"budget: {e}"
-            allowed = False
             self._record(start, prompt, estimate, 0.0, allowed=False, reason=reason)
             raise BudgetExceeded(reason) from e
 
+        # --- Run the wrapped agent; refund the reservation on any failure. ---
         try:
             result = self._inner.run(prompt, **kwargs)
         except Exception:
-            self._budget.commit(estimate)
+            reservation.release()
             raise
 
-        # Check what domains the response said it touched (Hermes returns this).
+        # --- Guard 2: egress allowlist on the domains the call touched. ---
         contacted = self._domains(result)
         blocked = [d for d in contacted if d not in self._allowed]
         if blocked:
+            reservation.release()
             reason = f"egress: {blocked}"
-            allowed = False
-            self._budget.commit(estimate)
             self._record(start, prompt, estimate, 0.0, allowed=False, reason=reason)
             raise EgressBlocked(reason)
 
+        # --- Commit the actual cost; a breach here still consumes the slot. ---
         actual = self._cost(result)
-        self._budget.commit(actual)
+        try:
+            reservation.commit(usd=actual)
+        except _PoolExceeded as e:
+            reason = f"budget: {e}"
+            self._record(start, prompt, estimate, actual, allowed=False, reason=reason)
+            raise BudgetExceeded(reason) from e
+
+        self._last_actual = max(self._last_actual, actual)
         self._record(start, prompt, estimate, actual, allowed=True, reason=None)
         return result
 

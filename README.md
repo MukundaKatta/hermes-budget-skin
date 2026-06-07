@@ -12,12 +12,12 @@ its own $5 cap and there was no shared counter. Three caps × no shared
 counter = a $15+/minute ceiling. I wrote up the story
 [here](https://dev.to/mukundakatta/how-one-bad-prompt-burned-40-of-my-claude-budget-in-18-minutes-lha).
 
-This library is the fix, composed of three already-published pieces:
+This library is the fix, composed of three pieces:
 
-| Library            | What it does                                   |
+| Piece              | What it does                                   |
 |--------------------|------------------------------------------------|
 | `token-budget-py`  | Shared atomic USD pool. `reserve()`→`commit()` |
-| `agentleash`       | Per-call USD limit + outbound domain allowlist |
+| egress allowlist   | Outbound domain allowlist (built in, no deps)  |
 | structured logging | One JSONL row per call, with cost + outcome    |
 
 Wrap Hermes once:
@@ -73,8 +73,8 @@ No bill alert on Monday morning.
 pip install hermes-budget-skin
 ```
 
-Pulls in `token-budget-py` and `agentleash` as runtime deps. Both are
-~600 LOC each, MIT, on PyPI already.
+Pulls in `token-budget-py` as its only runtime dep (MIT, on PyPI). The
+egress allowlist is a plain set check built into this package.
 
 ## How it composes
 
@@ -88,7 +88,7 @@ Pulls in `token-budget-py` and `agentleash` as runtime deps. Both are
                                 v                      v                      v
                        +---------------+       +---------------+       +---------------+
                        | reserve()     |       | egress check  |       | audit write   |
-                       | token-budget  |       | agentleash    |       | JSONL append  |
+                       | token-budget  |       | allowlist set |       | JSONL append  |
                        +---------------+       +---------------+       +---------------+
 ```
 
@@ -124,7 +124,6 @@ contents, deny-row audit, and the default estimator. All pass clean.
 ## Related
 
 - `token-budget-py` — https://pypi.org/project/token-budget-py/
-- `agentleash` — https://pypi.org/project/agentleash/
 - `claude-cost` (Rust, per-model spend math) — https://crates.io/crates/claude-cost
 - The dev.to article that started this — [How one bad prompt burned $40 of my Claude budget in 18 minutes](https://dev.to/mukundakatta/how-one-bad-prompt-burned-40-of-my-claude-budget-in-18-minutes-lha)
 
