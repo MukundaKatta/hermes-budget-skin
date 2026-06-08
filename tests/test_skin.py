@@ -111,6 +111,33 @@ def test_audit_log_records_denials(tmp_path: Path) -> None:
     assert row["reason"].startswith("budget:")
 
 
+def test_egress_block_refunds_pool() -> None:
+    # A blocked-egress call must refund its reservation so the shared pool is
+    # not consumed by a call whose result was rejected. After the block, a
+    # later allowed call within the same cap must still go through.
+    agent = _agent(cost_per_call=0.40, domains=["sketchy.example.com"])
+    skin = _wrap(agent, usd_cap=0.50)
+    with pytest.raises(EgressBlocked):
+        skin.run("hello")
+    # Pool was refunded; a fresh allowed call of the same cost still fits.
+    agent._domains = ["api.anthropic.com"]
+    skin.run("hello again")
+    assert agent.calls == 2
+
+
+def test_audit_log_records_egress_denials(tmp_path: Path) -> None:
+    log = tmp_path / "audit.jsonl"
+    agent = _agent(domains=["sketchy.example.com"])
+    skin = _wrap(agent, allowed_domains={"api.anthropic.com"}, audit_log=log)
+    with pytest.raises(EgressBlocked):
+        skin.run("hello")
+    lines = log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["allowed"] is False
+    assert row["reason"].startswith("egress:")
+
+
 def test_default_estimator_is_conservative() -> None:
     # Very long prompt should still estimate something nonzero.
     from hermes_budget_skin import _default_estimate

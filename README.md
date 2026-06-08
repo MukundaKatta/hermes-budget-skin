@@ -118,8 +118,9 @@ pip install -e .[dev]
 pytest
 ```
 
-6 tests cover the happy path, budget denial, egress denial, audit log
-contents, deny-row audit, and the default estimator. All pass clean.
+8 tests cover the happy path, budget denial, egress denial, egress refund,
+audit log contents, budget deny-row audit, egress deny-row audit, and the
+default estimator. All pass clean.
 
 ## Related
 
